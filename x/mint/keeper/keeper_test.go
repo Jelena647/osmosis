@@ -147,17 +147,20 @@ func (suite *KeeperTestSuite) TestGetProportions() {
 	}
 }
 
-func (suite *KeeperTestSuite) TestDistributeMintedCoin_ToDeveloperRewardsAddr() {
+func (suite *KeeperTestSuite) TestDistributeMintedCoin() {
+	const (
+		mintAmount  = 10000
+		gaugeAmount = mintAmount
+	)
+
 	var (
 		distrTo = lockuptypes.QueryCondition{
 			LockQueryType: lockuptypes.ByDuration,
-			Denom:         "lptoken",
+			Denom:         sdk.DefaultBondDenom,
 			Duration:      time.Second,
 		}
-		params       = suite.App.MintKeeper.GetParams(suite.Ctx)
-		gaugeCoins   = sdk.Coins{sdk.NewInt64Coin("stake", 10000)}
-		gaugeCreator = testAddressTwo
-		mintLPtokens = sdk.Coins{sdk.NewInt64Coin(distrTo.Denom, 200)}
+		params     = types.DefaultParams()
+		gaugeCoins = sdk.Coins{sdk.NewInt64Coin(sdk.DefaultBondDenom, gaugeAmount)}
 	)
 
 	tests := []struct {
@@ -173,7 +176,7 @@ func (suite *KeeperTestSuite) TestDistributeMintedCoin_ToDeveloperRewardsAddr() 
 					Weight:  sdk.NewDec(1),
 				},
 			},
-			mintCoin: sdk.NewCoin("stake", sdk.NewInt(10000)),
+			mintCoin: sdk.NewCoin(sdk.DefaultBondDenom, sdk.NewInt(mintAmount)),
 		},
 		{
 			name: "multiple dev reward addresses",
@@ -187,12 +190,12 @@ func (suite *KeeperTestSuite) TestDistributeMintedCoin_ToDeveloperRewardsAddr() 
 					Weight:  sdk.NewDecWithPrec(4, 1),
 				},
 			},
-			mintCoin: sdk.NewCoin("stake", sdk.NewInt(100000)),
+			mintCoin: sdk.NewCoin(sdk.DefaultBondDenom, sdk.NewInt(mintAmount)),
 		},
 		{
 			name:              "nil dev reward address",
 			weightedAddresses: nil,
-			mintCoin:          sdk.NewCoin("stake", sdk.NewInt(100000)),
+			mintCoin:          sdk.NewCoin(sdk.DefaultBondDenom, sdk.NewInt(mintAmount)),
 		},
 	}
 	for _, tc := range tests {
@@ -210,11 +213,9 @@ func (suite *KeeperTestSuite) TestDistributeMintedCoin_ToDeveloperRewardsAddr() 
 			params.WeightedDeveloperRewardsReceivers = tc.weightedAddresses
 			mintKeeper.SetParams(suite.Ctx, params)
 
-			// mints coins so supply exists on chain
-			suite.FundAcc(gaugeCreator, gaugeCoins)
-			suite.FundAcc(gaugeCreator, mintLPtokens)
-
-			gaugeId, err := intencentivesKeeper.CreateGauge(suite.Ctx, true, gaugeCreator, gaugeCoins, distrTo, time.Now(), 1)
+			// Create gauge. If not created, pool incentives rewards would go to community pool.
+			suite.FundAcc(testAddressOne, gaugeCoins)
+			gaugeId, err := intencentivesKeeper.CreateGauge(suite.Ctx, true, testAddressOne, gaugeCoins, distrTo, time.Now(), 1)
 			suite.Require().NoError(err)
 			err = poolincentivesKeeper.UpdateDistrRecords(suite.Ctx, poolincentivestypes.DistrRecord{
 				GaugeId: gaugeId,
@@ -222,6 +223,7 @@ func (suite *KeeperTestSuite) TestDistributeMintedCoin_ToDeveloperRewardsAddr() 
 			})
 			suite.Require().NoError(err)
 
+			// mints coins so supply exists on chain
 			err = mintKeeper.MintCoins(suite.Ctx, sdk.NewCoins(tc.mintCoin))
 			suite.Require().NoError(err)
 
@@ -233,17 +235,17 @@ func (suite *KeeperTestSuite) TestDistributeMintedCoin_ToDeveloperRewardsAddr() 
 			feeCollector := accountKeeper.GetModuleAddress(authtypes.FeeCollectorName)
 			suite.Require().Equal(
 				tc.mintCoin.Amount.ToDec().Mul(params.DistributionProportions.Staking).TruncateInt(),
-				bankKeeper.GetAllBalances(suite.Ctx, feeCollector).AmountOf("stake"))
+				bankKeeper.GetAllBalances(suite.Ctx, feeCollector).AmountOf(sdk.DefaultBondDenom))
 
 			if tc.weightedAddresses != nil {
 				suite.Require().Equal(
 					tc.mintCoin.Amount.ToDec().Mul(params.DistributionProportions.CommunityPool),
-					feePool.CommunityPool.AmountOf("stake"))
+					feePool.CommunityPool.AmountOf(sdk.DefaultBondDenom))
 			} else {
 				suite.Require().Equal(
 					// distribution go to community pool because nil dev reward addresses.
 					tc.mintCoin.Amount.ToDec().Mul((params.DistributionProportions.DeveloperRewards).Add(params.DistributionProportions.CommunityPool)),
-					feePool.CommunityPool.AmountOf("stake"))
+					feePool.CommunityPool.AmountOf(sdk.DefaultBondDenom))
 			}
 
 			// check devAddress balances
@@ -251,7 +253,7 @@ func (suite *KeeperTestSuite) TestDistributeMintedCoin_ToDeveloperRewardsAddr() 
 				devRewardsReceiver, _ := sdk.AccAddressFromBech32(weightedAddress.GetAddress())
 				suite.Require().Equal(
 					tc.mintCoin.Amount.ToDec().Mul(params.DistributionProportions.DeveloperRewards).Mul(params.WeightedDeveloperRewardsReceivers[i].Weight).TruncateInt(),
-					bankKeeper.GetBalance(suite.Ctx, devRewardsReceiver, "stake").Amount)
+					bankKeeper.GetBalance(suite.Ctx, devRewardsReceiver, sdk.DefaultBondDenom).Amount)
 			}
 		})
 	}
